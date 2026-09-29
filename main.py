@@ -1,14 +1,20 @@
 from flask import Flask, request, jsonify, send_file
+
 import yt_dlp
+
 import os
 import uuid
+
+import json
+import urllib.parse
+import urllib.request
 
 
 app = Flask(__name__)
 
 
 # ==========================================
-# CARPETA DE DESCARGAS
+# CARPETA TEMPORAL
 # ==========================================
 
 DOWNLOAD_DIR = "/tmp/downloads"
@@ -17,6 +23,34 @@ os.makedirs(
     DOWNLOAD_DIR,
     exist_ok=True
 )
+
+
+# ==========================================
+# INSTANCIAS INVIDIOUS
+# ==========================================
+#
+# El buscador probará una instancia.
+# Si falla, probará la siguiente.
+#
+# Estas son instancias que aparecen
+# actualmente en la lista oficial de
+# Invidious.
+#
+# ==========================================
+
+INVIDIOUS_INSTANCES = [
+
+    "https://inv.nadeko.net",
+
+    "https://invidious.nerdvpn.de",
+
+    "https://yt.chocolatemoo53.com",
+
+    "https://invidious.tiekoetter.com",
+
+    "https://invidious.f5.si"
+
+]
 
 
 # ==========================================
@@ -30,7 +64,11 @@ def inicio():
 
         "status": "ok",
 
-        "server": "JMLA Downloader"
+        "server": "JMLA Downloader",
+
+        "search": "Invidious",
+
+        "download": "yt-dlp"
 
     })
 
@@ -38,11 +76,25 @@ def inicio():
 # ==========================================
 # BUSCAR CANCIONES
 # ==========================================
+#
+# IMPORTANTE:
+#
+# YA NO UTILIZAMOS yt-dlp PARA BUSCAR.
+#
+# La búsqueda se hace mediante la API
+# pública de Invidious.
+#
+# ==========================================
 
 @app.route("/search", methods=["GET"])
 def buscar():
 
     consulta = request.args.get("q")
+
+
+    # ------------------------------------------
+    # Comprobar búsqueda
+    # ------------------------------------------
 
     if not consulta:
 
@@ -53,184 +105,343 @@ def buscar():
         }), 400
 
 
-    opciones = {
-
-        # No descargar el vídeo
-        "skip_download": True,
-
-        # Buscar resultados sin intentar
-        # extraer todos sus datos
-        "extract_flat": True,
-
-        # No buscar listas de reproducción
-        "noplaylist": True,
-
-        # Si un resultado falla,
-        # continuar con los demás
-        "ignoreerrors": True,
-
-        # Mantener silencioso el servidor
-        "quiet": True,
-
-        # Usar Deno para los desafíos
-        # de JavaScript de YouTube
-        "js_runtimes": {
-            "deno": {}
-        }
-
-    }
+    consulta = consulta.strip()
 
 
-    try:
+    if not consulta:
 
-        with yt_dlp.YoutubeDL(opciones) as ydl:
+        return jsonify({
 
-            resultados = ydl.extract_info(
+            "error": "La búsqueda está vacía"
 
-                "ytsearch10:" + consulta,
-
-                download=False
-
-            )
+        }), 400
 
 
-        canciones = []
+    # ==========================================
+    # PROBAR INSTANCIAS
+    # ==========================================
+
+    ultimo_error = "No se pudo conectar con Invidious"
 
 
-        if not resultados:
+    for instancia in INVIDIOUS_INSTANCES:
 
-            return jsonify({
+        try:
 
-                "resultados": []
+            # ----------------------------------
+            # Parámetros de búsqueda
+            # ----------------------------------
 
-            })
+            parametros = {
 
+                "q": consulta,
 
-        entradas = resultados.get(
-            "entries",
-            []
-        )
+                "page": "1",
 
+                "type": "video",
 
-        for video in entradas:
+                "sort": "relevance",
 
-            # Algunos resultados pueden
-            # venir vacíos si YouTube
-            # los bloquea.
-            if not video:
-                continue
+                "region": "DO"
 
-
-            video_id = video.get("id")
+            }
 
 
-            if not video_id:
-                continue
+            # ----------------------------------
+            # Crear URL
+            # ----------------------------------
 
+            url = (
 
-            titulo = video.get(
+                instancia
 
-                "title",
+                + "/api/v1/search?"
 
-                "Sin título"
-
-            )
-
-
-            artista = video.get(
-
-                "channel",
-
-                video.get(
-
-                    "uploader",
-
-                    "Desconocido"
-
+                + urllib.parse.urlencode(
+                    parametros
                 )
 
             )
 
 
-            # ==================================
-            # MINIATURA
-            # ==================================
+            print(
+                "BUSCANDO EN:",
+                instancia
+            )
 
-            imagen = (
 
-                "https://i.ytimg.com/vi/"
+            # ----------------------------------
+            # Solicitud
+            # ----------------------------------
 
-                + video_id
+            solicitud = urllib.request.Request(
 
-                + "/hqdefault.jpg"
+                url,
+
+                headers={
+
+                    "User-Agent":
+                        "JMLA-Downloader/1.0"
+
+                }
 
             )
 
 
+            with urllib.request.urlopen(
+
+                solicitud,
+
+                timeout=12
+
+            ) as respuesta:
+
+                contenido = respuesta.read().decode(
+                    "utf-8"
+                )
+
+
+            datos = json.loads(
+                contenido
+            )
+
+
+            # ----------------------------------
+            # Comprobar que recibimos una lista
+            # ----------------------------------
+
+            if not isinstance(
+                datos,
+                list
+            ):
+
+                ultimo_error = (
+                    "Respuesta inválida de "
+                    + instancia
+                )
+
+                continue
+
+
             # ==================================
-            # URL DEL VIDEO
+            # CONVERTIR RESULTADOS
             # ==================================
 
-            url = (
+            canciones = []
 
-                "https://www.youtube.com/watch?v="
 
-                + video_id
+            for resultado in datos:
+
+                # Solo queremos videos
+                if resultado.get("type") != "video":
+
+                    continue
+
+
+                video_id = resultado.get(
+                    "videoId"
+                )
+
+
+                if not video_id:
+
+                    continue
+
+
+                titulo = resultado.get(
+
+                    "title",
+
+                    "Sin título"
+
+                )
+
+
+                artista = resultado.get(
+
+                    "author",
+
+                    "Desconocido"
+
+                )
+
+
+                # ==================================
+                # MINIATURA
+                # ==================================
+
+                miniaturas = resultado.get(
+
+                    "videoThumbnails",
+
+                    []
+
+                )
+
+
+                imagen = ""
+
+
+                # Preferimos calidad alta
+                for miniatura in miniaturas:
+
+                    calidad = miniatura.get(
+                        "quality",
+                        ""
+                    )
+
+                    if calidad in [
+                        "maxres",
+                        "maxresdefault",
+                        "high"
+                    ]:
+
+                        imagen = miniatura.get(
+                            "url",
+                            ""
+                        )
+
+                        if imagen:
+
+                            break
+
+
+                # Si no encontramos una de alta
+                # calidad, utilizamos cualquiera.
+
+                if not imagen:
+
+                    for miniatura in miniaturas:
+
+                        imagen = miniatura.get(
+                            "url",
+                            ""
+                        )
+
+                        if imagen:
+
+                            break
+
+
+                # ----------------------------------
+                # RESPALDO
+                # ----------------------------------
+
+                if not imagen:
+
+                    imagen = (
+
+                        "https://i.ytimg.com/vi/"
+
+                        + video_id
+
+                        + "/hqdefault.jpg"
+
+                    )
+
+
+                # ==================================
+                # URL DE YOUTUBE
+                # ==================================
+
+                video_url = (
+
+                    "https://www.youtube.com/watch?v="
+
+                    + video_id
+
+                )
+
+
+                # ==================================
+                # AGREGAR RESULTADO
+                # ==================================
+
+                canciones.append({
+
+                    "titulo": titulo,
+
+                    "artista": artista,
+
+                    "imagen": imagen,
+
+                    "url": video_url
+
+                })
+
+
+                # Solo necesitamos 10
+                if len(canciones) >= 10:
+
+                    break
+
+
+            # ==================================
+            # DEVOLVER RESULTADOS
+            # ==================================
+
+            print(
+
+                "RESULTADOS ENCONTRADOS:",
+
+                len(canciones)
 
             )
 
 
-            canciones.append({
+            return jsonify({
 
-                "titulo": titulo,
-
-                "artista": artista,
-
-                "imagen": imagen,
-
-                "url": url
+                "resultados": canciones
 
             })
 
 
-        return jsonify({
+        except Exception as e:
 
-            "resultados": canciones
-
-        })
+            ultimo_error = str(e)
 
 
-    except Exception as e:
+            print(
 
-        # IMPORTANTE:
-        #
-        # Si YouTube devuelve 429 o bloquea
-        # una consulta, no queremos que
-        # la aplicación se caiga.
-        #
-        # Devolvemos una respuesta válida
-        # al Android.
+                "FALLO EN",
 
-        print(
-            "ERROR EN BUSQUEDA:",
-            str(e)
-        )
+                instancia,
 
+                ":",
 
-        return jsonify({
+                ultimo_error
 
-            "resultados": [],
-
-            "error": (
-                "YouTube no permitió realizar "
-                "la búsqueda en este momento."
             )
 
-        })
+
+            # Continuar con la siguiente
+            # instancia.
+            continue
+
+
+    # ==========================================
+    # TODAS LAS INSTANCIAS FALLARON
+    # ==========================================
+
+    return jsonify({
+
+        "resultados": [],
+
+        "error":
+            "No se pudo conectar con "
+            "ningún servidor de búsqueda."
+
+    }), 503
 
 
 # ==========================================
 # DESCARGAR CANCION
+# ==========================================
+#
+# ESTA PARTE SIGUE UTILIZANDO YT-DLP.
+#
+# No la estamos cambiando de sistema.
+#
 # ==========================================
 
 @app.route("/download", methods=["POST"])
@@ -239,11 +450,16 @@ def descargar():
     data = request.get_json()
 
 
+    # ------------------------------------------
+    # Comprobar datos
+    # ------------------------------------------
+
     if not data:
 
         return jsonify({
 
-            "error": "No se recibieron datos"
+            "error":
+                "No se recibieron datos"
 
         }), 400
 
@@ -252,7 +468,8 @@ def descargar():
 
         return jsonify({
 
-            "error": "Falta la URL"
+            "error":
+                "Falta la URL"
 
         }), 400
 
@@ -264,7 +481,8 @@ def descargar():
 
         return jsonify({
 
-            "error": "La URL está vacía"
+            "error":
+                "La URL está vacía"
 
         }), 400
 
@@ -288,18 +506,22 @@ def descargar():
 
 
     # ==========================================
-    # OPCIONES DE YT-DLP
+    # OPCIONES YT-DLP
     # ==========================================
 
     opciones = {
 
-        "format": "bestaudio/best",
+        "format":
+            "bestaudio/best",
 
-        "outtmpl": salida,
+        "outtmpl":
+            salida,
 
-        "noplaylist": True,
+        "noplaylist":
+            True,
 
-        "quiet": True,
+        "quiet":
+            True,
 
         "js_runtimes": {
 
@@ -329,6 +551,10 @@ def descargar():
 
     try:
 
+        # --------------------------------------
+        # Descargar
+        # --------------------------------------
+
         with yt_dlp.YoutubeDL(
             opciones
         ) as ydl:
@@ -342,9 +568,9 @@ def descargar():
             )
 
 
-        # ==========================================
+        # ======================================
         # COMPROBAR MP3
-        # ==========================================
+        # ======================================
 
         archivo = os.path.join(
 
@@ -355,7 +581,9 @@ def descargar():
         )
 
 
-        if not os.path.exists(archivo):
+        if not os.path.exists(
+            archivo
+        ):
 
             return jsonify({
 
@@ -365,9 +593,9 @@ def descargar():
             }), 500
 
 
-        # ==========================================
-        # NOMBRE DE LA CANCION
-        # ==========================================
+        # ======================================
+        # TÍTULO
+        # ======================================
 
         titulo = info.get(
 
@@ -378,8 +606,9 @@ def descargar():
         )
 
 
-        # Evitar caracteres problemáticos
-        # en el nombre del archivo
+        # ======================================
+        # LIMPIAR NOMBRE
+        # ======================================
 
         caracteres_invalidos = [
 
@@ -399,14 +628,17 @@ def descargar():
         for caracter in caracteres_invalidos:
 
             titulo = titulo.replace(
+
                 caracter,
+
                 "_"
+
             )
 
 
-        # ==========================================
+        # ======================================
         # ENVIAR MP3
-        # ==========================================
+        # ======================================
 
         return send_file(
 
@@ -426,8 +658,11 @@ def descargar():
     except Exception as e:
 
         print(
+
             "ERROR EN DESCARGA:",
+
             str(e)
+
         )
 
 
