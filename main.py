@@ -32,15 +32,19 @@ def buscar():
     consulta = request.args.get("q")
 
     if not consulta:
+
         return jsonify({
             "error": "Falta la búsqueda"
         }), 400
 
     opciones = {
+
         "quiet": True,
+
         "skip_download": True,
-        "extract_flat": True,
+
         "noplaylist": True,
+
         "js_runtimes": {
             "deno": {}
         }
@@ -84,21 +88,22 @@ def buscar():
 
                 "url": video.get(
                     "webpage_url",
-                    video.get(
-                        "url",
-                        ""
-                    )
+                    ""
                 )
             })
 
         return jsonify({
+
             "resultados": canciones
+
         })
 
     except Exception as e:
 
         return jsonify({
+
             "error": str(e)
+
         }), 500
 
 
@@ -114,7 +119,9 @@ def download():
     if not data or "url" not in data:
 
         return jsonify({
+
             "error": "Falta la URL"
+
         }), 400
 
     url = data["url"]
@@ -149,6 +156,7 @@ def download():
 
                 "preferredquality": "192"
             }
+
         ]
     }
 
@@ -169,7 +177,9 @@ def download():
         if not os.path.exists(archivo):
 
             return jsonify({
+
                 "error": "No se pudo crear el MP3"
+
             }), 500
 
         return send_file(
@@ -189,7 +199,9 @@ def download():
     except Exception as e:
 
         return jsonify({
+
             "error": str(e)
+
         }), 500
 
 
@@ -207,6 +219,8 @@ if __name__ == "__main__":
     )
 
     app.run(
+
         host="0.0.0.0",
+
         port=puerto
     )
