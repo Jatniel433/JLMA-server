@@ -10,7 +10,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 
 # ==========================================
-# INICIO DEL SERVIDOR
+# INICIO
 # ==========================================
 
 @app.route("/")
@@ -43,6 +43,8 @@ def buscar():
 
         "skip_download": True,
 
+        "extract_flat": True,
+
         "noplaylist": True,
 
         "js_runtimes": {
@@ -66,6 +68,18 @@ def buscar():
             if not video:
                 continue
 
+            video_id = video.get("id", "")
+
+            # Miniatura estándar de YouTube
+            imagen = ""
+
+            if video_id:
+                imagen = (
+                    "https://i.ytimg.com/vi/"
+                    + video_id
+                    + "/hqdefault.jpg"
+                )
+
             canciones.append({
 
                 "titulo": video.get(
@@ -81,14 +95,11 @@ def buscar():
                     )
                 ),
 
-                "imagen": video.get(
-                    "thumbnail",
-                    ""
-                ),
+                "imagen": imagen,
 
-                "url": video.get(
-                    "webpage_url",
-                    ""
+                "url": (
+                    "https://www.youtube.com/watch?v="
+                    + video_id
                 )
             })
 
@@ -156,7 +167,6 @@ def download():
 
                 "preferredquality": "192"
             }
-
         ]
     }
 
@@ -206,7 +216,7 @@ def download():
 
 
 # ==========================================
-# EJECUTAR SERVIDOR
+# SERVIDOR
 # ==========================================
 
 if __name__ == "__main__":
