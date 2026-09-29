@@ -3,22 +3,35 @@ import yt_dlp
 import os
 import uuid
 
-app = Flask(__name__)
 
-DOWNLOAD_DIR = "/tmp/downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+app = Flask(__name__)
 
 
 # ==========================================
-# INICIO
+# CARPETA DE DESCARGAS
+# ==========================================
+
+DOWNLOAD_DIR = "/tmp/downloads"
+
+os.makedirs(
+    DOWNLOAD_DIR,
+    exist_ok=True
+)
+
+
+# ==========================================
+# PAGINA PRINCIPAL
 # ==========================================
 
 @app.route("/")
 def inicio():
 
     return jsonify({
+
         "status": "ok",
+
         "server": "JMLA Downloader"
+
     })
 
 
@@ -34,74 +47,151 @@ def buscar():
     if not consulta:
 
         return jsonify({
+
             "error": "Falta la búsqueda"
+
         }), 400
+
 
     opciones = {
 
-        "quiet": True,
-
+        # No descargar el vídeo
         "skip_download": True,
 
+        # Buscar resultados sin intentar
+        # extraer todos sus datos
         "extract_flat": True,
 
+        # No buscar listas de reproducción
         "noplaylist": True,
 
+        # Si un resultado falla,
+        # continuar con los demás
+        "ignoreerrors": True,
+
+        # Mantener silencioso el servidor
+        "quiet": True,
+
+        # Usar Deno para los desafíos
+        # de JavaScript de YouTube
         "js_runtimes": {
             "deno": {}
         }
+
     }
+
 
     try:
 
         with yt_dlp.YoutubeDL(opciones) as ydl:
 
             resultados = ydl.extract_info(
+
                 "ytsearch10:" + consulta,
+
                 download=False
+
             )
+
 
         canciones = []
 
-        for video in resultados.get("entries", []):
 
+        if not resultados:
+
+            return jsonify({
+
+                "resultados": []
+
+            })
+
+
+        entradas = resultados.get(
+            "entries",
+            []
+        )
+
+
+        for video in entradas:
+
+            # Algunos resultados pueden
+            # venir vacíos si YouTube
+            # los bloquea.
             if not video:
                 continue
 
-            video_id = video.get("id", "")
 
-            # Miniatura estándar de YouTube
-            imagen = ""
+            video_id = video.get("id")
 
-            if video_id:
-                imagen = (
-                    "https://i.ytimg.com/vi/"
-                    + video_id
-                    + "/hqdefault.jpg"
+
+            if not video_id:
+                continue
+
+
+            titulo = video.get(
+
+                "title",
+
+                "Sin título"
+
+            )
+
+
+            artista = video.get(
+
+                "channel",
+
+                video.get(
+
+                    "uploader",
+
+                    "Desconocido"
+
                 )
+
+            )
+
+
+            # ==================================
+            # MINIATURA
+            # ==================================
+
+            imagen = (
+
+                "https://i.ytimg.com/vi/"
+
+                + video_id
+
+                + "/hqdefault.jpg"
+
+            )
+
+
+            # ==================================
+            # URL DEL VIDEO
+            # ==================================
+
+            url = (
+
+                "https://www.youtube.com/watch?v="
+
+                + video_id
+
+            )
+
 
             canciones.append({
 
-                "titulo": video.get(
-                    "title",
-                    "Sin título"
-                ),
+                "titulo": titulo,
 
-                "artista": video.get(
-                    "channel",
-                    video.get(
-                        "uploader",
-                        "Desconocido"
-                    )
-                ),
+                "artista": artista,
 
                 "imagen": imagen,
 
-                "url": (
-                    "https://www.youtube.com/watch?v="
-                    + video_id
-                )
+                "url": url
+
             })
+
 
         return jsonify({
 
@@ -109,13 +199,34 @@ def buscar():
 
         })
 
+
     except Exception as e:
+
+        # IMPORTANTE:
+        #
+        # Si YouTube devuelve 429 o bloquea
+        # una consulta, no queremos que
+        # la aplicación se caiga.
+        #
+        # Devolvemos una respuesta válida
+        # al Android.
+
+        print(
+            "ERROR EN BUSQUEDA:",
+            str(e)
+        )
+
 
         return jsonify({
 
-            "error": str(e)
+            "resultados": [],
 
-        }), 500
+            "error": (
+                "YouTube no permitió realizar "
+                "la búsqueda en este momento."
+            )
+
+        })
 
 
 # ==========================================
@@ -123,11 +234,21 @@ def buscar():
 # ==========================================
 
 @app.route("/download", methods=["POST"])
-def download():
+def descargar():
 
     data = request.get_json()
 
-    if not data or "url" not in data:
+
+    if not data:
+
+        return jsonify({
+
+            "error": "No se recibieron datos"
+
+        }), 400
+
+
+    if "url" not in data:
 
         return jsonify({
 
@@ -135,14 +256,40 @@ def download():
 
         }), 400
 
+
     url = data["url"]
 
-    nombre = str(uuid.uuid4())
+
+    if not url:
+
+        return jsonify({
+
+            "error": "La URL está vacía"
+
+        }), 400
+
+
+    # ==========================================
+    # NOMBRE TEMPORAL
+    # ==========================================
+
+    nombre = str(
+        uuid.uuid4()
+    )
+
 
     salida = os.path.join(
+
         DOWNLOAD_DIR,
+
         nombre + ".%(ext)s"
+
     )
+
+
+    # ==========================================
+    # OPCIONES DE YT-DLP
+    # ==========================================
 
     opciones = {
 
@@ -155,42 +302,111 @@ def download():
         "quiet": True,
 
         "js_runtimes": {
+
             "deno": {}
+
         },
 
         "postprocessors": [
 
             {
-                "key": "FFmpegExtractAudio",
 
-                "preferredcodec": "mp3",
+                "key":
+                    "FFmpegExtractAudio",
 
-                "preferredquality": "192"
+                "preferredcodec":
+                    "mp3",
+
+                "preferredquality":
+                    "192"
+
             }
+
         ]
+
     }
+
 
     try:
 
-        with yt_dlp.YoutubeDL(opciones) as ydl:
+        with yt_dlp.YoutubeDL(
+            opciones
+        ) as ydl:
 
             info = ydl.extract_info(
+
                 url,
+
                 download=True
+
             )
 
+
+        # ==========================================
+        # COMPROBAR MP3
+        # ==========================================
+
         archivo = os.path.join(
+
             DOWNLOAD_DIR,
+
             nombre + ".mp3"
+
         )
+
 
         if not os.path.exists(archivo):
 
             return jsonify({
 
-                "error": "No se pudo crear el MP3"
+                "error":
+                    "No se pudo crear el MP3"
 
             }), 500
+
+
+        # ==========================================
+        # NOMBRE DE LA CANCION
+        # ==========================================
+
+        titulo = info.get(
+
+            "title",
+
+            "cancion"
+
+        )
+
+
+        # Evitar caracteres problemáticos
+        # en el nombre del archivo
+
+        caracteres_invalidos = [
+
+            "/",
+            "\\",
+            ":",
+            "*",
+            "?",
+            "\"",
+            "<",
+            ">",
+            "|"
+
+        ]
+
+
+        for caracter in caracteres_invalidos:
+
+            titulo = titulo.replace(
+                caracter,
+                "_"
+            )
+
+
+        # ==========================================
+        # ENVIAR MP3
+        # ==========================================
 
         return send_file(
 
@@ -198,15 +414,22 @@ def download():
 
             as_attachment=True,
 
-            download_name=info.get(
-                "title",
-                "cancion"
-            ) + ".mp3",
+            download_name=
+                titulo + ".mp3",
 
-            mimetype="audio/mpeg"
+            mimetype=
+                "audio/mpeg"
+
         )
 
+
     except Exception as e:
+
+        print(
+            "ERROR EN DESCARGA:",
+            str(e)
+        )
+
 
         return jsonify({
 
@@ -222,15 +445,22 @@ def download():
 if __name__ == "__main__":
 
     puerto = int(
+
         os.environ.get(
+
             "PORT",
+
             8080
+
         )
+
     )
+
 
     app.run(
 
         host="0.0.0.0",
 
         port=puerto
+
     )
