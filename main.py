@@ -1,701 +1,207 @@
-from flask import Flask, request, jsonify, send_file
-
+from flask import Flask, request, jsonify, Response
+import requests
 import yt_dlp
-
 import os
-import uuid
-
-import json
-import urllib.parse
-import urllib.request
-
+import tempfile
 
 app = Flask(__name__)
 
-
-# ==========================================
-# CARPETA TEMPORAL
-# ==========================================
-
-DOWNLOAD_DIR = "/tmp/downloads"
-
-os.makedirs(
-    DOWNLOAD_DIR,
-    exist_ok=True
-)
-
-
-# ==========================================
-# INSTANCIAS INVIDIOUS
-# ==========================================
-#
-# El buscador probará una instancia.
-# Si falla, probará la siguiente.
-#
-# Estas son instancias que aparecen
-# actualmente en la lista oficial de
-# Invidious.
-#
-# ==========================================
-
+# Instancias de Invidious para realizar las búsquedas
 INVIDIOUS_INSTANCES = [
-
     "https://inv.nadeko.net",
-
     "https://invidious.nerdvpn.de",
-
     "https://yt.chocolatemoo53.com",
-
     "https://invidious.tiekoetter.com",
-
     "https://invidious.f5.si"
-
 ]
 
 
-# ==========================================
-# PAGINA PRINCIPAL
-# ==========================================
-
 @app.route("/")
 def inicio():
-
-    return jsonify({
-
-        "status": "ok",
-
-        "server": "JMLA Downloader",
-
-        "search": "Invidious",
-
-        "download": "yt-dlp"
-
-    })
+    return "JMLA Downloader Server funcionando"
 
 
-# ==========================================
+# =========================================================
 # BUSCAR CANCIONES
-# ==========================================
-#
-# IMPORTANTE:
-#
-# YA NO UTILIZAMOS yt-dlp PARA BUSCAR.
-#
-# La búsqueda se hace mediante la API
-# pública de Invidious.
-#
-# ==========================================
+# =========================================================
 
-@app.route("/search", methods=["GET"])
+@app.route("/search")
 def buscar():
-
-    consulta = request.args.get("q")
-
-
-    # ------------------------------------------
-    # Comprobar búsqueda
-    # ------------------------------------------
+    consulta = request.args.get("q", "").strip()
 
     if not consulta:
+        return jsonify({"resultados": []})
 
-        return jsonify({
-
-            "error": "Falta la búsqueda"
-
-        }), 400
-
-
-    consulta = consulta.strip()
-
-
-    if not consulta:
-
-        return jsonify({
-
-            "error": "La búsqueda está vacía"
-
-        }), 400
-
-
-    # ==========================================
-    # PROBAR INSTANCIAS
-    # ==========================================
-
-    ultimo_error = "No se pudo conectar con Invidious"
-
+    headers = {
+        "User-Agent": "JMLA-Downloader/1.0"
+    }
 
     for instancia in INVIDIOUS_INSTANCES:
 
         try:
-
-            # ----------------------------------
-            # Parámetros de búsqueda
-            # ----------------------------------
+            url = instancia + "/api/v1/search"
 
             parametros = {
-
                 "q": consulta,
-
-                "page": "1",
-
+                "page": 1,
                 "type": "video",
-
                 "sort": "relevance",
-
                 "region": "DO"
-
             }
 
-
-            # ----------------------------------
-            # Crear URL
-            # ----------------------------------
-
-            url = (
-
-                instancia
-
-                + "/api/v1/search?"
-
-                + urllib.parse.urlencode(
-                    parametros
-                )
-
-            )
-
-
-            print(
-                "BUSCANDO EN:",
-                instancia
-            )
-
-
-            # ----------------------------------
-            # Solicitud
-            # ----------------------------------
-
-            solicitud = urllib.request.Request(
-
+            respuesta = requests.get(
                 url,
-
-                headers={
-
-                    "User-Agent":
-                        "JMLA-Downloader/1.0"
-
-                }
-
+                params=parametros,
+                headers=headers,
+                timeout=10
             )
 
-
-            with urllib.request.urlopen(
-
-                solicitud,
-
-                timeout=12
-
-            ) as respuesta:
-
-                contenido = respuesta.read().decode(
-                    "utf-8"
-                )
-
-
-            datos = json.loads(
-                contenido
-            )
-
-
-            # ----------------------------------
-            # Comprobar que recibimos una lista
-            # ----------------------------------
-
-            if not isinstance(
-                datos,
-                list
-            ):
-
-                ultimo_error = (
-                    "Respuesta inválida de "
-                    + instancia
-                )
-
+            if respuesta.status_code != 200:
                 continue
 
+            datos = respuesta.json()
 
-            # ==================================
-            # CONVERTIR RESULTADOS
-            # ==================================
+            resultados = []
 
-            canciones = []
+            for video in datos:
 
-
-            for resultado in datos:
-
-                # Solo queremos videos
-                if resultado.get("type") != "video":
-
+                if video.get("type") != "video":
                     continue
 
-
-                video_id = resultado.get(
-                    "videoId"
-                )
-
+                video_id = video.get("videoId")
 
                 if not video_id:
-
                     continue
 
+                titulo = video.get("title", "Sin título")
+                artista = video.get("author", "Desconocido")
 
-                titulo = resultado.get(
-
-                    "title",
-
-                    "Sin título"
-
-                )
-
-
-                artista = resultado.get(
-
-                    "author",
-
-                    "Desconocido"
-
-                )
-
-
-                # ==================================
-                # MINIATURA
-                # ==================================
-
-                miniaturas = resultado.get(
-
-                    "videoThumbnails",
-
-                    []
-
-                )
-
-
-                imagen = ""
-
-
-                # Preferimos calidad alta
-                for miniatura in miniaturas:
-
-                    calidad = miniatura.get(
-                        "quality",
-                        ""
-                    )
-
-                    if calidad in [
-                        "maxres",
-                        "maxresdefault",
-                        "high"
-                    ]:
-
-                        imagen = miniatura.get(
-                            "url",
-                            ""
-                        )
-
-                        if imagen:
-
-                            break
-
-
-                # Si no encontramos una de alta
-                # calidad, utilizamos cualquiera.
-
-                if not imagen:
-
-                    for miniatura in miniaturas:
-
-                        imagen = miniatura.get(
-                            "url",
-                            ""
-                        )
-
-                        if imagen:
-
-                            break
-
-
-                # ----------------------------------
-                # RESPALDO
-                # ----------------------------------
-
-                if not imagen:
-
-                    imagen = (
-
-                        "https://i.ytimg.com/vi/"
-
-                        + video_id
-
-                        + "/hqdefault.jpg"
-
-                    )
-
-
-                # ==================================
-                # URL DE YOUTUBE
-                # ==================================
-
-                video_url = (
-
-                    "https://www.youtube.com/watch?v="
-
+                # Construimos nosotros mismos la miniatura
+                imagen = (
+                    "https://i.ytimg.com/vi/"
                     + video_id
-
+                    + "/hqdefault.jpg"
                 )
 
-
-                # ==================================
-                # AGREGAR RESULTADO
-                # ==================================
-
-                canciones.append({
-
+                resultados.append({
                     "titulo": titulo,
-
                     "artista": artista,
-
                     "imagen": imagen,
-
-                    "url": video_url
-
+                    "url": "https://www.youtube.com/watch?v=" + video_id
                 })
 
-
-                # Solo necesitamos 10
-                if len(canciones) >= 10:
-
+                # Solo queremos 10 resultados
+                if len(resultados) >= 10:
                     break
 
-
-            # ==================================
-            # DEVOLVER RESULTADOS
-            # ==================================
-
-            print(
-
-                "RESULTADOS ENCONTRADOS:",
-
-                len(canciones)
-
-            )
-
-
             return jsonify({
-
-                "resultados": canciones
-
+                "resultados": resultados
             })
 
-
         except Exception as e:
-
-            ultimo_error = str(e)
-
-
-            print(
-
-                "FALLO EN",
-
-                instancia,
-
-                ":",
-
-                ultimo_error
-
-            )
-
-
-            # Continuar con la siguiente
-            # instancia.
+            print("Error con Invidious:", instancia)
+            print(e)
             continue
 
-
-    # ==========================================
-    # TODAS LAS INSTANCIAS FALLARON
-    # ==========================================
-
     return jsonify({
-
-        "resultados": [],
-
-        "error":
-            "No se pudo conectar con "
-            "ningún servidor de búsqueda."
-
-    }), 503
+        "error": "No se pudo realizar la búsqueda"
+    }), 500
 
 
-# ==========================================
-# DESCARGAR CANCION
-# ==========================================
-#
-# ESTA PARTE SIGUE UTILIZANDO YT-DLP.
-#
-# No la estamos cambiando de sistema.
-#
-# ==========================================
+# =========================================================
+# DESCARGAR MP3
+# =========================================================
 
 @app.route("/download", methods=["POST"])
 def descargar():
 
-    data = request.get_json()
+    datos = request.get_json()
 
-
-    # ------------------------------------------
-    # Comprobar datos
-    # ------------------------------------------
-
-    if not data:
-
+    if not datos or "url" not in datos:
         return jsonify({
-
-            "error":
-                "No se recibieron datos"
-
+            "error": "Falta la URL"
         }), 400
 
+    video_url = datos["url"]
 
-    if "url" not in data:
-
-        return jsonify({
-
-            "error":
-                "Falta la URL"
-
-        }), 400
-
-
-    url = data["url"]
-
-
-    if not url:
-
-        return jsonify({
-
-            "error":
-                "La URL está vacía"
-
-        }), 400
-
-
-    # ==========================================
-    # NOMBRE TEMPORAL
-    # ==========================================
-
-    nombre = str(
-        uuid.uuid4()
+    archivo_temporal = tempfile.NamedTemporaryFile(
+        suffix=".%(ext)s",
+        delete=False
     )
 
+    archivo_temporal.close()
 
-    salida = os.path.join(
-
-        DOWNLOAD_DIR,
-
-        nombre + ".%(ext)s"
-
-    )
-
-
-    # ==========================================
-    # OPCIONES YT-DLP
-    # ==========================================
-
-    opciones = {
-
-        "format":
-            "bestaudio/best",
-
-        "outtmpl":
-            salida,
-
-        "noplaylist":
-            True,
-
-        "quiet":
-            True,
-
-        "js_runtimes": {
-
-            "deno": {}
-
-        },
-
-        "postprocessors": [
-
-            {
-
-                "key":
-                    "FFmpegExtractAudio",
-
-                "preferredcodec":
-                    "mp3",
-
-                "preferredquality":
-                    "192"
-
-            }
-
-        ]
-
-    }
-
+    ruta_salida = archivo_temporal.name
 
     try:
 
-        # --------------------------------------
-        # Descargar
-        # --------------------------------------
+        opciones = {
+            "format": "bestaudio/best",
 
-        with yt_dlp.YoutubeDL(
-            opciones
-        ) as ydl:
+            "outtmpl": ruta_salida,
 
-            info = ydl.extract_info(
+            "noplaylist": True,
 
-                url,
+            "quiet": False,
 
-                download=True
+            "js_runtimes": {
+                "deno": {}
+            },
 
-            )
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192"
+                }
+            ]
+        }
 
+        with yt_dlp.YoutubeDL(opciones) as ydl:
+            ydl.download([video_url])
 
-        # ======================================
-        # COMPROBAR MP3
-        # ======================================
+        archivo_mp3 = ruta_salida.rsplit(".", 1)[0] + ".mp3"
 
-        archivo = os.path.join(
-
-            DOWNLOAD_DIR,
-
-            nombre + ".mp3"
-
-        )
-
-
-        if not os.path.exists(
-            archivo
-        ):
-
+        if not os.path.exists(archivo_mp3):
             return jsonify({
-
-                "error":
-                    "No se pudo crear el MP3"
-
+                "error": "No se pudo crear el MP3"
             }), 500
 
+        with open(archivo_mp3, "rb") as archivo:
+            contenido = archivo.read()
 
-        # ======================================
-        # TÍTULO
-        # ======================================
-
-        titulo = info.get(
-
-            "title",
-
-            "cancion"
-
+        return Response(
+            contenido,
+            mimetype="audio/mpeg",
+            headers={
+                "Content-Disposition": "attachment; filename=cancion.mp3"
+            }
         )
-
-
-        # ======================================
-        # LIMPIAR NOMBRE
-        # ======================================
-
-        caracteres_invalidos = [
-
-            "/",
-            "\\",
-            ":",
-            "*",
-            "?",
-            "\"",
-            "<",
-            ">",
-            "|"
-
-        ]
-
-
-        for caracter in caracteres_invalidos:
-
-            titulo = titulo.replace(
-
-                caracter,
-
-                "_"
-
-            )
-
-
-        # ======================================
-        # ENVIAR MP3
-        # ======================================
-
-        return send_file(
-
-            archivo,
-
-            as_attachment=True,
-
-            download_name=
-                titulo + ".mp3",
-
-            mimetype=
-                "audio/mpeg"
-
-        )
-
 
     except Exception as e:
 
-        print(
-
-            "ERROR EN DESCARGA:",
-
-            str(e)
-
-        )
-
+        print("ERROR DESCARGANDO:")
+        print(e)
 
         return jsonify({
-
             "error": str(e)
-
         }), 500
 
+    finally:
 
-# ==========================================
-# SERVIDOR
-# ==========================================
+        # Intentamos eliminar archivos temporales
+        try:
+            if os.path.exists(ruta_salida):
+                os.remove(ruta_salida)
+        except:
+            pass
 
-if __name__ == "__main__":
-
-    puerto = int(
-
-        os.environ.get(
-
-            "PORT",
-
-            8080
-
-        )
-
-    )
-
-
-    app.run(
-
-        host="0.0.0.0",
-
-        port=puerto
-
-    )
+        try:
+            if os.path.exists(
+                ruta_salida.rsplit(".", 1)[0] + ".mp3"
+            ):
+                os.remove(
+                    ruta_salida.rsplit(".", 1)[0] + ".mp3"
+                )
+        except:
+            pass
